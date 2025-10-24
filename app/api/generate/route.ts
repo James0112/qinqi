@@ -1,18 +1,30 @@
 import { NextResponse } from "next/server";
-import OpenAI from "openai";
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { buildSystemPrompt, buildUserPrompt } from "@/lib/prompt";
 
-export const runtime = "nodejs";
+export const runtime = "nodejs"; // 在 Vercel 用 Node 运行时更稳
 
-const openai = new OpenAI({
-  baseURL: "https://openrouter.ai/api/v1",
-  apiKey: process.env.OPENROUTER_API_KEY,
-  defaultHeaders: {
-    "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "http://localhost:3000",
-    "X-Title": process.env.OPENROUTER_SITE_NAME || "亲戚必问",
-  },
-});
+// 小工具：带超时的 fetch
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit & { timeoutMs?: number } = {}) {
+  const { timeoutMs = 15000, ...rest } = init;
+  const ac = new AbortController();
+  const id = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    // @ts-ignore
+    return await fetch(input, { ...rest, signal: ac.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+export async function GET() {
+  // 健康探测，便于你直接访问 /api/generate 看是否正常返回 JSON
+  const hasKey = Boolean(process.env.OPENROUTER_API_KEY);
+  return NextResponse.json({
+    ok: true,
+    tip: "use POST to generate",
+    OPENROUTER_API_KEY: hasKey ? "✅" : "❌",
+  });
+}
 
 export async function POST(req: Request) {
   try {
@@ -21,32 +33,56 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "请提供有效的问题和礼貌程度" }, { status: 400 });
     }
 
-    const messages: ChatCompletionMessageParam[] = [
-      { role: "system", content: buildSystemPrompt() },
-      { role: "user",   content: buildUserPrompt(question, politeness) },
-    ];
+    if (!process.env.OPENROUTER_API_KEY) {
+      return NextResponse.json({ error: "服务端未读取到 OPENROUTER_API_KEY（请在 Vercel 环境变量里配置，并 Redeploy）" }, { status: 500 });
+    }
 
-    const completion = await openai.chat.completions.create({
-      model: "deepseek/deepseek-r1:free",
-      messages,
-      temperature: 0.8,
-      top_p: 0.9,
+    const resp = await fetchWithTimeout("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY!}`,
+        "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://example.com",
+        "X-Title": process.env.OPENROUTER_SITE_NAME || "亲戚必问",
+      },
+      body: JSON.stringify({
+        model: "deepseek/deepseek-r1:free",
+        messages: [
+          { role: "system", content: buildSystemPrompt() },
+          { role: "user",   content: buildUserPrompt(question, politeness) },
+        ],
+        temperature: 0.8,
+        top_p: 0.9,
+      }),
+      timeoutMs: 20000,
+      // Vercel 上默认 undici，保持默认即可；不指定 keep-alive，避免偶发连接复用问题
     });
 
-    const text = completion?.choices?.[0]?.message?.content ?? "";
+    if (!resp.ok) {
+      const txt = await resp.text().catch(() => "");
+      return NextResponse.json({ error: `OpenRouter HTTP ${resp.status}`, detail: txt.slice(0, 500) }, { status: 502 });
+    }
+
+    const data = await resp.json();
+    const text: string = data?.choices?.[0]?.message?.content || "";
+
     const lines = text
       .split(/\n+/)
-      .map((s) => s.replace(/^\s*\d+[\.、)]\s*/, "").trim())
+      .map(s => s.replace(/^\s*\d+[\.、)]\s*/, "").trim())
       .filter(Boolean)
       .slice(0, 3);
 
     if (lines.length === 0) {
-      return NextResponse.json({ error: "生成回复失败，请重试" }, { status: 502 });
+      return NextResponse.json({ error: "生成回复失败（返回内容为空）" }, { status: 502 });
     }
+
     return NextResponse.json({ responses: lines });
   } catch (err: any) {
     return NextResponse.json(
-      { error: `OpenRouter 调用失败：${err?.message || "Unknown error"}`, cause: String(err?.cause || "") },
+      {
+        error: `OpenRouter 调用失败：${err?.message || "Unknown error"}`,
+        cause: String(err?.cause || ""),
+      },
       { status: 502 }
     );
   }
