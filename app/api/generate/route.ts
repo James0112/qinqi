@@ -5,7 +5,7 @@ import { buildSystemPrompt, buildUserPrompt } from "@/lib/prompt";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // 可按需调整靠近你或 OpenRouter 的区域，留空也没问题
-export const preferredRegion = ["hkg1", "sin1", "pdx1"] as const;
+export const preferredRegion: string[] = ["hkg1", "sin1", "pdx1"];
 
 /** 将 header 值转为 ASCII，避免 ByteString 错误 */
 function asciiHeader(val: string | undefined, fallback: string) {
