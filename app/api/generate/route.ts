@@ -3,6 +3,14 @@ import { buildSystemPrompt, buildUserPrompt } from "@/lib/prompt";
 
 export const runtime = "nodejs"; // 在 Vercel 用 Node 运行时更稳
 
+// 在文件顶部加一个小工具，确保 header 值是 ASCII
+function asciiHeader(val: string | undefined, fallback: string) {
+  if (!val) return fallback;
+  // 删除所有非 ASCII 字符
+  const ascii = val.replace(/[^\x00-\x7F]/g, "");
+  return ascii || fallback;
+}
+
 // 小工具：带超时的 fetch
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit & { timeoutMs?: number } = {}) {
   const { timeoutMs = 15000, ...rest } = init;
@@ -42,8 +50,9 @@ export async function POST(req: Request) {
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY!}`,
-        "HTTP-Referer": process.env.OPENROUTER_SITE_URL || "https://example.com",
-        "X-Title": process.env.OPENROUTER_SITE_NAME || "亲戚必问",
+        // 这两个是可选头：必须用 ASCII
+        "HTTP-Referer": asciiHeader(process.env.OPENROUTER_SITE_URL, "https://example.com"),
+        "X-Title": asciiHeader(process.env.OPENROUTER_SITE_NAME, "Qinqi Ask"),
       },
       body: JSON.stringify({
         model: "deepseek/deepseek-r1:free",
